@@ -51,118 +51,210 @@ REST APIs are exposed by each service to allow communication between the backend
 
 ## Project Structure
 ```plaintext
-/messageme-frontend
-  /src
-    /app
-    /assets
-    /environments
-  /node_modules
-  angular.json
-  package.json
-
-/ChatGateway
-  /src
-  /resources
-
-/MessageMe
-  /src
-  /resources
-
-/MessageStorageService
-  /src
-  /resources
-
-/proto-common
-  /src/main
-
-/infra
-  docker-compose.yml
+your-project-root/
+├── MessageMe/
+│   ├── src/
+│   ├── Dockerfile
+│   └── pom.xml
+├── ChatGateway/
+│   ├── src/
+│   ├── Dockerfile
+│   └── pom.xml
+├── MessageStorageService/
+│   ├── src/
+│   ├── Dockerfile
+│   └── pom.xml
+├── proto-common/
+│   └── src/main/
+├── messageme-frontend/
+│   ├── src/
+│   ├── angular.json
+│   └── package.json
+└── docker-compose.yml
 ```
 
 ---
 
-## Docker Setup
+## Prerequisites
 
-This project uses Docker to containerize all microservices. The microservices are configured to run in separate containers, allowing for easy scaling and maintenance.
+Before running the application, make sure you have the following installed:
 
-### Setting up the Environment
+- **Docker Desktop** (for Mac/Windows) or **Docker Engine** (for Linux)
+- **PostgreSQL** 13+ (running locally or accessible remotely)
+- **Java 17+** (for local development)
+- **Maven 3.6+** (for building the projects)
 
-Before running the services, you must set up the PostgreSQL databases and configure the environment variables. Here's how you do that:
+---
 
-#### 1. Create PostgreSQL Databases
+## Setup Instructions
 
-You need to create two PostgreSQL databases:
+### Step 1: Create PostgreSQL Databases
 
-- `messageme` for user-related data
-- `message_storage` for storing messages
+You need to create two PostgreSQL databases for the application:
 
-Example commands for creating databases:
-```bash
-psql -U postgres
-CREATE DATABASE messageme;
+1. **usersMessageMe** - for user authentication and management
+2. **message_storage** - for storing chat messages
+
+Connect to your PostgreSQL instance and run:
+```sql
+CREATE DATABASE "usersMessageMe";
 CREATE DATABASE message_storage;
 ```
 
-#### 2. Update Environment Variables in `docker-compose.yml`
-
-Configure the following environment variables in your `docker-compose.yml`:
-```yaml
-messageme:
-  environment:
-    DB_URL: jdbc:postgresql://host.docker.internal:5433/usersMessageMe
-    DB_USERNAME: your_postgres_username
-    DB_PASSWORD: your_postgres_password
-    JWT_SECRET: your_jwt_secret_key
-    EMAIL_USER: your_email@gmail.com
-    EMAIL_PASS: your_email_app_password
-
-message-storage:
-  environment:
-    SPRING_DATASOURCE_URL: jdbc:postgresql://host.docker.internal:5433/message_storage
-    SPRING_DATASOURCE_USERNAME: your_postgres_username
-    SPRING_DATASOURCE_PASSWORD: your_postgres_password
-```
-
-Replace `your_postgres_username`, `your_postgres_password`, and `your_jwt_secret_key` with your own values.
+**Note:** Make sure PostgreSQL is running on port **5433** (or adjust the port in the configuration).
 
 ---
 
-## Running the Microservices
+### Step 2: Create `docker-compose.yml`
 
-The project uses Docker Compose to run all microservices together. Here are the steps to run the services locally:
+In the root directory of your project (where all microservices folders are located), create a file named `docker-compose.yml` with the following content:
+```yaml
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
 
-### 1. Configure Environment Variables
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9093:9093"
 
-Follow the instructions above to configure environment variables in `docker-compose.yml`.
+  messageme:
+    build: ./MessageMe
+    container_name: messageme
+    environment:
+      DB_URL: jdbc:postgresql://host.docker.internal:5433/usersMessageMe
+      DB_USERNAME: your_postgres_username
+      DB_PASSWORD: your_postgres_password
+      JWT_SECRET: your_jwt_secret_key_here
+      EMAIL_USER: "your_email@gmail.com"
+      EMAIL_PASS: "your_email_app_password"
+    ports:
+      - "8081:8081"
+      - "9090:9090"
 
-### 2. Start the Services
+  message-storage:
+    build: ./MessageStorageService
+    container_name: message-storage
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://host.docker.internal:5433/message_storage
+      SPRING_DATASOURCE_USERNAME: your_postgres_username
+      SPRING_DATASOURCE_PASSWORD: your_postgres_password
+    ports:
+      - "8082:8082"
+      - "9292:9292"
 
-In the `infra` directory of the project, run:
+  chat-gateway:
+    build: ./ChatGateway
+    container_name: chatgateway
+    depends_on:
+      - messageme
+      - message-storage
+      - kafka
+    environment:
+      MESSAGEME_AUTH_HOST: messageme
+      MESSAGEME_AUTH_PORT: 9090
+      MESSAGE_STORAGE_HOST: message-storage
+      MESSAGE_STORAGE_PORT: 9292
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8080:8081"
+```
+
+---
+
+### Step 3: Configure Environment Variables
+
+**IMPORTANT:** Replace the placeholder values in `docker-compose.yml` with your actual credentials:
+
+#### Database Configuration:
+- **`DB_USERNAME`**: Your PostgreSQL username (e.g., `postgres`, `admin`, `your_username`)
+- **`DB_PASSWORD`**: Your PostgreSQL password
+- **`DB_URL`**: Should point to `host.docker.internal:5433` if PostgreSQL is running locally on port 5433
+  - If your PostgreSQL is on a different port, change `5433` to your port number
+  - If PostgreSQL is in a Docker container, use the container name instead of `host.docker.internal`
+
+#### JWT Configuration:
+- **`JWT_SECRET`**: Generate a secure random string for JWT token signing
+  - You can generate one using: `openssl rand -base64 32`
+  - Example: `RjvtMF7pgKMqcaeQPzmP0aGgHbOOX8ytteqBjbGIBDw=`
+
+#### Email Configuration (for email verification):
+- **`EMAIL_USER`**: Your Gmail address (e.g., `yourname@gmail.com`)
+- **`EMAIL_PASS`**: Your Gmail App Password (NOT your regular Gmail password)
+  - To generate an App Password:
+    1. Go to your Google Account settings
+    2. Enable 2-Step Verification
+    3. Go to "App passwords" and generate a new password for "Mail"
+    4. Use the generated 16-character password here
+
+---
+
+### Step 4: Build and Run Docker Containers
+
+Navigate to the directory containing `docker-compose.yml` and run:
 ```bash
+# Build all Docker images
 docker compose build
+
+# Start all services
 docker compose up
 ```
 
-This will build the Docker images and start the containers for all services:
-- MessageMe
-- ChatGateway
-- MessageStorageService
-- Kafka
-- Zookeeper
+To run in detached mode (background):
+```bash
+docker compose up -d
+```
 
-### 3. Verify Services are Running
+---
+
+### Step 5: Verify Services are Running
 
 Check that all containers are running:
 ```bash
 docker compose ps
 ```
 
-### 4. Access the Services
+You should see all 5 services running:
+- `zookeeper`
+- `kafka`
+- `messageme`
+- `message-storage`
+- `chatgateway`
 
-- **MessageMe API**: `http://localhost:8081`
-- **MessageStorageService API**: `http://localhost:8082`
-- **ChatGateway API**: `http://localhost:8080`
-- **Kafka**: `localhost:9093`
+Check logs for any errors:
+```bash
+# View logs for all services
+docker compose logs
+
+# View logs for a specific service
+docker compose logs messageme
+docker compose logs chatgateway
+docker compose logs message-storage
+```
+
+---
+
+## Access Services
+
+Once all services are running, you can access them at the following URLs:
+
+- **MessageMe API**: http://localhost:8081
+- **MessageStorageService API**: http://localhost:8082
+- **ChatGateway API**: http://localhost:8080
+- **Kafka**: localhost:9093
 
 ---
 
@@ -178,9 +270,46 @@ The **ChatGateway** and **MessageStorageService** microservices communicate usin
 
 ---
 
-## Running the Frontend (Separate Repository)
+## API Documentation
 
-The MessageMe backend does not include the frontend code, which will be hosted in a separate repository. However, once you integrate the frontend, the communication will happen through the REST APIs and WebSocket connections exposed by the backend services.
+### MessageMe Service Endpoints
+
+#### Authentication
+- **POST** `/api/auth/register` - Register a new user
+- **POST** `/api/auth/login` - Login and receive JWT token
+- **POST** `/api/auth/verify-email` - Verify email address
+- **POST** `/api/auth/verify-sms` - Verify SMS code
+
+#### User Management
+- **GET** `/api/users/profile` - Get user profile (requires JWT)
+- **PUT** `/api/users/profile` - Update user profile (requires JWT)
+
+### ChatGateway Service Endpoints
+
+#### Messaging
+- **POST** `/api/chat/send` - Send a message (requires JWT)
+- **GET** `/api/chat/history` - Get chat history (requires JWT)
+- **WebSocket** `/ws/chat` - Real-time chat connection
+
+### MessageStorageService gRPC
+
+This service primarily communicates via gRPC and is not directly exposed via REST API.
+
+---
+
+## Stopping Services
+
+To stop all running services:
+```bash
+# Stop services (keeps data)
+docker compose stop
+
+# Stop and remove containers (keeps data)
+docker compose down
+
+# Stop, remove containers and volumes (deletes data)
+docker compose down -v
+```
 
 ---
 
@@ -189,6 +318,7 @@ The MessageMe backend does not include the frontend code, which will be hosted i
 ### Common Errors:
 
 #### Port Already in Use
+
 If you encounter port conflicts (e.g., port 9093):
 ```bash
 # Find the process using the port
@@ -197,10 +327,14 @@ sudo lsof -i :9093
 # Stop the conflicting service (e.g., local Kafka)
 brew services stop kafka
 
+# Or kill the process
+kill -9 <PID>
+
 # Or change the port in docker-compose.yml
 ```
 
 #### Kafka Communication Issues
+
 Ensure that Kafka and Zookeeper are running properly in Docker containers:
 ```bash
 docker compose logs kafka
@@ -208,6 +342,7 @@ docker compose logs zookeeper
 ```
 
 #### gRPC Errors
+
 Check gRPC server logs for issues related to message encoding/decoding:
 ```bash
 docker compose logs messageme
@@ -216,12 +351,14 @@ docker compose logs chatgateway
 ```
 
 #### Database Connection Issues
+
 Make sure the PostgreSQL databases are created and the correct credentials are provided in `docker-compose.yml`. Verify connection:
 ```bash
-psql -U your_username -d messageme -h localhost -p 5433
+psql -U your_username -d usersMessageMe -h localhost -p 5433
 ```
 
 #### Docker Build Failures
+
 If Docker cannot pull images, check your internet connection:
 ```bash
 # Test Docker network connectivity
@@ -230,57 +367,18 @@ docker run --rm alpine ping -c 3 google.com
 # Restart Docker Desktop if needed
 ```
 
----
+#### Orphan Containers Warning
 
-## Advantages of This Architecture
-
-### 1. Scalability
-The use of Kafka allows the system to scale efficiently by decoupling services and enabling asynchronous communication between them. This is especially important for real-time messaging.
-
-### 2. Microservices
-Each part of the application (authentication, messaging, storage) is handled by its own microservice, allowing independent scaling and maintenance.
-
-### 3. Inter-Service Communication via gRPC
-gRPC provides fast and efficient communication between microservices, ensuring low-latency and high-performance interactions.
-
-### 4. Containerization with Docker
-The entire application is containerized using Docker, allowing it to run consistently across different environments and making deployment easier.
-
-### 5. Event-Driven Architecture
-Kafka enables event-driven communication patterns, making the system more resilient and allowing for easy addition of new consumers or producers.
-
----
-
-## API Documentation
-
-### MessageMe Service Endpoints
-
-#### Authentication
-- `POST /api/auth/register` - Register a new user
-- `POST /api/auth/login` - Login and receive JWT token
-- `POST /api/auth/verify-email` - Verify email address
-- `POST /api/auth/verify-sms` - Verify SMS code
-
-#### User Management
-- `GET /api/users/profile` - Get user profile (requires JWT)
-- `PUT /api/users/profile` - Update user profile (requires JWT)
-
-### ChatGateway Service Endpoints
-
-#### Messaging
-- `POST /api/chat/send` - Send a message (requires JWT)
-- `GET /api/chat/history` - Get chat history (requires JWT)
-- `WebSocket /ws/chat` - Real-time chat connection
-
-### MessageStorageService gRPC
-
-This service primarily communicates via gRPC and is not directly exposed via REST API.
+If you see warnings about orphan containers:
+```bash
+docker compose down --remove-orphans -v
+```
 
 ---
 
 ## Development
 
-### Prerequisites
+### Prerequisites for Local Development
 - Java 17+
 - Maven 3.6+
 - Docker Desktop
@@ -309,6 +407,31 @@ mvn test
 
 ---
 
+## Advantages of This Architecture
+
+### 1. Scalability
+The use of Kafka allows the system to scale efficiently by decoupling services and enabling asynchronous communication between them. This is especially important for real-time messaging.
+
+### 2. Microservices
+Each part of the application (authentication, messaging, storage) is handled by its own microservice, allowing independent scaling and maintenance.
+
+### 3. Inter-Service Communication via gRPC
+gRPC provides fast and efficient communication between microservices, ensuring low-latency and high-performance interactions.
+
+### 4. Containerization with Docker
+The entire application is containerized using Docker, allowing it to run consistently across different environments and making deployment easier.
+
+### 5. Event-Driven Architecture
+Kafka enables event-driven communication patterns, making the system more resilient and allowing for easy addition of new consumers or producers.
+
+---
+
+## Running the Frontend (Separate Repository)
+
+The MessageMe backend does not include the frontend code, which will be hosted in a separate repository. However, once you integrate the frontend, the communication will happen through the REST APIs and WebSocket connections exposed by the backend services.
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please follow these steps:
@@ -321,6 +444,11 @@ Contributions are welcome! Please follow these steps:
 
 ---
 
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
 
 ## Contact
 
