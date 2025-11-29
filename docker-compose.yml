@@ -1,0 +1,65 @@
+version: '3.9'
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9093:9093"
+
+  messageme:
+    build: ./MessageMe
+    container_name: messageme
+    environment:
+      DB_URL: jdbc:postgresql://host.docker.internal:5433/usersMessageMe
+      DB_USERNAME: amangeldimadina
+      DB_PASSWORD: mayddee
+      JWT_SECRET: RjvtMF7pgKMqcaeQPzmP0aGgHbOOX8ytteqBjbGIBDw=
+      EMAIL_USER: "a.madikosh2004@gmail.com"
+      EMAIL_PASS: "crgacbqsdcnaznek"
+    ports:
+      - "8081:8081"
+      - "9090:9090"
+
+  message-storage:
+    build: ./MessageStorageService
+    container_name: message-storage
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://host.docker.internal:5433/message_storage
+      SPRING_DATASOURCE_USERNAME: amangeldimadina
+      SPRING_DATASOURCE_PASSWORD: mayddee
+    ports:
+      - "8082:8082"
+      - "9292:9292"
+
+  chat-gateway:
+    build: ./ChatGateway
+    container_name: chatgateway
+    depends_on:
+      - messageme
+      - message-storage
+      - kafka
+    environment:
+      MESSAGEME_AUTH_HOST: messageme
+      MESSAGEME_AUTH_PORT: 9090
+      MESSAGE_STORAGE_HOST: message-storage
+      MESSAGE_STORAGE_PORT: 9292
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8080:8081"
